@@ -1,28 +1,49 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
-  Map,
-  Plus,
-  Trash2,
-  Play,
-  RotateCw,
-  Info,
-  Compass,
-  Check,
-  X,
-  Target,
-  ExternalLink,
-} from "lucide-react";
+import { Map, Plus, Trash2, Play, Compass, Target } from "lucide-react";
 import {
   getGeoGridConfigs,
   createGeoGridConfig,
-  updateGeoGridConfig,
   addGeoGridKeywords,
   removeGeoGridKeywords,
   triggerGeoGridCheck,
   getGeoGridLatestResults,
 } from "@/serverFunctions/geo-grid";
+
+type GeoGridSnapshot = {
+  id: number;
+  runId: string;
+  keywordId: string;
+  keyword: string;
+  gridX: number;
+  gridY: number;
+  latitude: number;
+  longitude: number;
+  position: number | null;
+  checkedAt: string;
+};
+
+type GeoGridConfig = {
+  id: string;
+  businessName: string;
+  latitude: number;
+  longitude: number;
+  gridSize: number;
+  gridSpacing: number;
+  languageCode: string;
+  scheduleInterval: string;
+  isActive: number;
+  lastCheckedAt: string | null;
+  createdAt: string;
+};
+
+type GeoGridKeyword = {
+  id: string;
+  configId: string;
+  keyword: string;
+  createdAt: string;
+};
 
 type Props = {
   projectId: string;
@@ -31,7 +52,9 @@ type Props = {
 export function GeoGridPage({ projectId }: Props) {
   const queryClient = useQueryClient();
   const [selectedConfigId, setSelectedConfigId] = useState<string | null>(null);
-  const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(null);
+  const [selectedKeywordId, setSelectedKeywordId] = useState<string | null>(
+    null,
+  );
 
   // Setup form state
   const [businessName, setBusinessName] = useState("");
@@ -49,10 +72,21 @@ export function GeoGridPage({ projectId }: Props) {
 
   const activeConfigId = selectedConfigId || configs?.[0]?.id || null;
 
-  const { data: results, isLoading: isResultsLoading } = useQuery({
+  const { data: results } = useQuery({
     queryKey: ["geoGridResults", activeConfigId],
-    queryFn: () => getGeoGridLatestResults({ data: { configId: activeConfigId!, projectId } }),
+    queryFn: () =>
+      getGeoGridLatestResults({
+        data: { configId: activeConfigId!, projectId },
+      }),
     enabled: !!activeConfigId,
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const status = data?.latestRun?.status;
+      if (status === "pending" || status === "running") {
+        return 3000;
+      }
+      return false;
+    },
   });
 
   // Mutations
@@ -61,30 +95,46 @@ export function GeoGridPage({ projectId }: Props) {
       createGeoGridConfig({ data }),
     onSuccess: (res) => {
       toast.success("Geo Grid tracker created!");
-      void queryClient.invalidateQueries({ queryKey: ["geoGridConfigs", projectId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["geoGridConfigs", projectId],
+      });
       setSelectedConfigId(res.configId);
     },
-    onError: (err: any) => {
-      toast.error(err.message || "Failed to create tracker");
+    onError: (err: unknown) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to create tracker",
+      );
     },
   });
 
   const addKeywordsMutation = useMutation({
     mutationFn: (data: { configId: string; keywords: string[] }) =>
-      addGeoGridKeywords({ data: { projectId, configId: data.configId, keywords: data.keywords } }),
+      addGeoGridKeywords({
+        data: { projectId, configId: data.configId, keywords: data.keywords },
+      }),
     onSuccess: () => {
       toast.success("Keywords added successfully!");
-      void queryClient.invalidateQueries({ queryKey: ["geoGridResults", activeConfigId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["geoGridResults", activeConfigId],
+      });
       setNewKeywordInput("");
     },
   });
 
   const removeKeywordMutation = useMutation({
     mutationFn: (data: { configId: string; keywordIds: string[] }) =>
-      removeGeoGridKeywords({ data: { projectId, configId: data.configId, keywordIds: data.keywordIds } }),
+      removeGeoGridKeywords({
+        data: {
+          projectId,
+          configId: data.configId,
+          keywordIds: data.keywordIds,
+        },
+      }),
     onSuccess: () => {
       toast.success("Keyword removed");
-      void queryClient.invalidateQueries({ queryKey: ["geoGridResults", activeConfigId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["geoGridResults", activeConfigId],
+      });
       if (selectedKeywordId) setSelectedKeywordId(null);
     },
   });
@@ -94,13 +144,14 @@ export function GeoGridPage({ projectId }: Props) {
       triggerGeoGridCheck({ data: { projectId, configId: data.configId } }),
     onSuccess: () => {
       toast.success("Geo Grid check triggered! Refreshing results shortly.");
-      // Poll results to update status
-      setTimeout(() => {
-        void queryClient.invalidateQueries({ queryKey: ["geoGridResults", activeConfigId] });
-      }, 2000);
+      void queryClient.invalidateQueries({
+        queryKey: ["geoGridResults", activeConfigId],
+      });
     },
-    onError: (err: any) => {
-      toast.error(err.message || "Failed to trigger check");
+    onError: (err: unknown) => {
+      toast.error(
+        err instanceof Error ? err.message : "Failed to trigger check",
+      );
     },
   });
 
@@ -149,12 +200,17 @@ export function GeoGridPage({ projectId }: Props) {
   };
 
   // Derive active keyword and grid results
-  const currentKeywordId = selectedKeywordId || results?.keywords?.[0]?.id || null;
-  const currentKeyword = results?.keywords?.find((k) => k.id === currentKeywordId);
+  const currentKeywordId =
+    selectedKeywordId || results?.keywords?.[0]?.id || null;
+  const currentKeyword = results?.keywords?.find(
+    (k) => k.id === currentKeywordId,
+  );
 
-  const gridSnapshots = useMemo(() => {
+  const gridSnapshots = useMemo((): GeoGridSnapshot[] => {
     if (!results?.snapshots || !currentKeyword) return [];
-    return results.snapshots.filter((s: any) => s.keywordId === currentKeywordId);
+    return (results.snapshots as GeoGridSnapshot[]).filter(
+      (s) => s.keywordId === currentKeywordId,
+    );
   }, [results, currentKeywordId, currentKeyword]);
 
   // Aggregate metrics
@@ -164,7 +220,7 @@ export function GeoGridPage({ projectId }: Props) {
     let rankPointsCount = 0;
     let top3Count = 0;
 
-    gridSnapshots.forEach((s: any) => {
+    gridSnapshots.forEach((s) => {
       if (s.position !== null) {
         totalRank += s.position;
         rankPointsCount++;
@@ -174,14 +230,14 @@ export function GeoGridPage({ projectId }: Props) {
       }
     });
 
-    const arp = rankPointsCount > 0 ? (totalRank / rankPointsCount).toFixed(1) : "-";
+    const arp =
+      rankPointsCount > 0 ? (totalRank / rankPointsCount).toFixed(1) : "-";
     const solv = ((top3Count / gridSnapshots.length) * 100).toFixed(0) + "%";
 
     return { arp, solv };
   }, [gridSnapshots]);
 
   if (isConfigsLoading) {
-
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <span className="loading loading-spinner loading-lg text-primary" />
@@ -198,21 +254,31 @@ export function GeoGridPage({ projectId }: Props) {
             <Map className="size-8" />
           </div>
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight">Setup Geo Grid Maps Rank Tracking</h1>
+            <h1 className="text-3xl font-extrabold tracking-tight">
+              Setup Geo Grid Maps Rank Tracking
+            </h1>
             <p className="text-base-content/70">
-              Track how your local business ranks on Google Maps across a geographical grid coordinates.
+              Track how your local business ranks on Google Maps across a
+              geographical grid coordinates.
             </p>
           </div>
         </div>
 
         <div className="grid gap-6 md:grid-cols-3">
           <div className="md:col-span-2 card bg-base-100 shadow-xl border border-base-200">
-            <form onSubmit={handleCreateConfigSubmit} className="card-body gap-5">
-              <h2 className="card-title text-xl font-bold">Configure Business Location</h2>
+            <form
+              onSubmit={handleCreateConfigSubmit}
+              className="card-body gap-5"
+            >
+              <h2 className="card-title text-xl font-bold">
+                Configure Business Location
+              </h2>
 
               <div className="form-control w-full">
                 <label className="label">
-                  <span className="label-text font-semibold">Tracked Business Name</span>
+                  <span className="label-text font-semibold">
+                    Tracked Business Name
+                  </span>
                 </label>
                 <input
                   type="text"
@@ -223,14 +289,17 @@ export function GeoGridPage({ projectId }: Props) {
                   required
                 />
                 <span className="label-text-alt mt-1.5 text-base-content/50">
-                  Must exactly match the Google Business Profile title or main search result title.
+                  Must exactly match the Google Business Profile title or main
+                  search result title.
                 </span>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text font-semibold">Center Latitude</span>
+                    <span className="label-text font-semibold">
+                      Center Latitude
+                    </span>
                   </label>
                   <input
                     type="number"
@@ -243,7 +312,9 @@ export function GeoGridPage({ projectId }: Props) {
                 </div>
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text font-semibold">Center Longitude</span>
+                    <span className="label-text font-semibold">
+                      Center Longitude
+                    </span>
                   </label>
                   <input
                     type="number"
@@ -273,7 +344,9 @@ export function GeoGridPage({ projectId }: Props) {
                 </div>
                 <div className="form-control">
                   <label className="label">
-                    <span className="label-text font-semibold">Grid Spacing</span>
+                    <span className="label-text font-semibold">
+                      Grid Spacing
+                    </span>
                   </label>
                   <select
                     value={gridSpacing}
@@ -308,7 +381,8 @@ export function GeoGridPage({ projectId }: Props) {
             <div className="card-body gap-4">
               <h3 className="font-bold text-lg">Quick Start presets</h3>
               <p className="text-sm text-base-content/60">
-                Instantly populate coordinates and business names for testing maps rank checks locally:
+                Instantly populate coordinates and business names for testing
+                maps rank checks locally:
               </p>
               <div className="flex flex-col gap-2 mt-2">
                 <button
@@ -337,7 +411,8 @@ export function GeoGridPage({ projectId }: Props) {
     );
   }
 
-  const activeConfig = configs.find((c) => c.id === activeConfigId) || configs[0];
+  const activeConfig =
+    configs.find((c) => c.id === activeConfigId) || configs[0];
 
   // Render visual grid representation
   const renderGridCells = () => {
@@ -348,7 +423,8 @@ export function GeoGridPage({ projectId }: Props) {
           <div>
             <h4 className="font-bold">No Run Data Available</h4>
             <p className="text-sm text-base-content/65 max-w-sm">
-              Trigger a check run or add keywords to compile maps rank grid tracking data.
+              Trigger a check run or add keywords to compile maps rank grid
+              tracking data.
             </p>
           </div>
         </div>
@@ -359,11 +435,17 @@ export function GeoGridPage({ projectId }: Props) {
     const half = Math.floor(size / 2);
 
     // Arrange grid point mappings
-    const rows: Array<Array<{ x: number; y: number; item: any }>> = [];
+    const rows: Array<
+      Array<{ x: number; y: number; item: GeoGridSnapshot | undefined }>
+    > = [];
     for (let y = half; y >= -half; y--) {
-      const cols: Array<{ x: number; y: number; item: any }> = [];
+      const cols: Array<{
+        x: number;
+        y: number;
+        item: GeoGridSnapshot | undefined;
+      }> = [];
       for (let x = -half; x <= half; x++) {
-        const item = gridSnapshots.find((s: any) => s.gridX === x && s.gridY === y);
+        const item = gridSnapshots.find((s) => s.gridX === x && s.gridY === y);
         cols.push({ x, y, item });
       }
       rows.push(cols);
@@ -372,44 +454,59 @@ export function GeoGridPage({ projectId }: Props) {
     return (
       <div className="flex flex-col items-center justify-center p-6 bg-base-100 rounded-2xl border border-base-200 shadow-inner">
         <div className="flex flex-col gap-4">
-          {rows.map((rowArr: any[], rowIndex: number) => (
+          {rows.map((rowArr, rowIndex: number) => (
             <div key={rowIndex} className="flex gap-4">
-              {rowArr.map(({ x, y, item }: { x: number; y: number; item: any }) => {
-                const isCenter = x === 0 && y === 0;
-                let colorClass = "bg-base-200 text-base-content/40 border-base-300";
-                let rankLabel = "X";
+              {rowArr.map(
+                ({
+                  x,
+                  y,
+                  item,
+                }: {
+                  x: number;
+                  y: number;
+                  item: GeoGridSnapshot | undefined;
+                }) => {
+                  const isCenter = x === 0 && y === 0;
+                  let colorClass =
+                    "bg-base-200 text-base-content/40 border-base-300";
+                  let rankLabel = "X";
 
-                if (item) {
-                  if (item.position === null) {
-                    colorClass = "bg-neutral text-neutral-content border-neutral-focus";
-                  } else if (item.position <= 3) {
-                    colorClass = "bg-emerald-500 text-emerald-950 border-emerald-600 shadow-md shadow-emerald-500/20";
-                    rankLabel = String(item.position);
-                  } else if (item.position <= 10) {
-                    colorClass = "bg-amber-500 text-amber-950 border-amber-600 shadow-md shadow-amber-500/20";
-                    rankLabel = String(item.position);
-                  } else {
-                    colorClass = "bg-rose-500 text-rose-950 border-rose-600 shadow-md shadow-rose-500/20";
-                    rankLabel = String(item.position);
+                  if (item) {
+                    if (item.position === null) {
+                      colorClass =
+                        "bg-neutral text-neutral-content border-neutral-focus";
+                    } else if (item.position <= 3) {
+                      colorClass =
+                        "bg-emerald-500 text-emerald-950 border-emerald-600 shadow-md shadow-emerald-500/20";
+                      rankLabel = String(item.position);
+                    } else if (item.position <= 10) {
+                      colorClass =
+                        "bg-amber-500 text-amber-950 border-amber-600 shadow-md shadow-amber-500/20";
+                      rankLabel = String(item.position);
+                    } else {
+                      colorClass =
+                        "bg-rose-500 text-rose-950 border-rose-600 shadow-md shadow-rose-500/20";
+                      rankLabel = String(item.position);
+                    }
                   }
-                }
 
-                return (
-                  <div
-                    key={`${x}-${y}`}
-                    className={`tooltip tooltip-bottom`}
-                    data-tip={`Coordinate: (${item?.latitude.toFixed(4)}, ${item?.longitude.toFixed(4)}) - Rank: ${item?.position ?? "Not Ranking"}`}
-                  >
+                  return (
                     <div
-                      className={`size-12 md:size-16 rounded-full border-2 flex items-center justify-center transition-all hover:scale-115 cursor-pointer font-extrabold text-lg ${colorClass} ${
-                        isCenter ? "ring-4 ring-primary/45 ring-offset-2" : ""
-                      }`}
+                      key={`${x}-${y}`}
+                      className={`tooltip tooltip-bottom`}
+                      data-tip={`Coordinate: (${item?.latitude.toFixed(4)}, ${item?.longitude.toFixed(4)}) - Rank: ${item?.position ?? "Not Ranking"}`}
                     >
-                      {rankLabel}
+                      <div
+                        className={`size-12 md:size-16 rounded-full border-2 flex items-center justify-center transition-all hover:scale-115 cursor-pointer font-extrabold text-lg ${colorClass} ${
+                          isCenter ? "ring-4 ring-primary/45 ring-offset-2" : ""
+                        }`}
+                      >
+                        {rankLabel}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                },
+              )}
             </div>
           ))}
         </div>
@@ -445,7 +542,11 @@ export function GeoGridPage({ projectId }: Props) {
             <Map className="size-8 text-primary" /> Geo Grid Maps Rank Tracker
           </h1>
           <p className="text-sm text-base-content/70">
-            Track Maps pack visibility for <strong className="text-base-content">{activeConfig.businessName}</strong>.
+            Track Maps pack visibility for{" "}
+            <strong className="text-base-content">
+              {activeConfig.businessName}
+            </strong>
+            .
           </p>
         </div>
 
@@ -455,20 +556,25 @@ export function GeoGridPage({ projectId }: Props) {
             onChange={(e) => setSelectedConfigId(e.target.value)}
             className="select select-bordered select-sm w-full md:w-auto"
           >
-            {configs.map((c: any) => (
+            {configs.map((c: GeoGridConfig) => (
               <option key={c.id} value={c.id}>
                 {c.businessName} ({c.gridSize}x{c.gridSize})
               </option>
             ))}
           </select>
 
-
           <button
-            onClick={() => triggerCheckMutation.mutate({ configId: activeConfig.id })}
-            disabled={triggerCheckMutation.isPending || results?.latestRun?.status === "running"}
+            onClick={() =>
+              triggerCheckMutation.mutate({ configId: activeConfig.id })
+            }
+            disabled={
+              triggerCheckMutation.isPending ||
+              results?.latestRun?.status === "running"
+            }
             className="btn btn-primary btn-sm gap-2"
           >
-            {triggerCheckMutation.isPending || results?.latestRun?.status === "running" ? (
+            {triggerCheckMutation.isPending ||
+            results?.latestRun?.status === "running" ? (
               <span className="loading loading-spinner loading-xs" />
             ) : (
               <Play className="size-4" />
@@ -481,21 +587,34 @@ export function GeoGridPage({ projectId }: Props) {
       {/* Overview Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
-          <span className="text-sm text-base-content/60 font-medium">Average Map Rank (ARP)</span>
-          <span className="text-3xl font-extrabold text-primary mt-1">{metrics.arp}</span>
-        </div>
-        <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
-          <span className="text-sm text-base-content/60 font-medium">Share of Local Voice (SoLV)</span>
-          <span className="text-3xl font-extrabold text-secondary mt-1">{metrics.solv}</span>
-        </div>
-        <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
-          <span className="text-sm text-base-content/60 font-medium">Grid Center</span>
-          <span className="text-sm font-semibold truncate mt-2">
-            {activeConfig.latitude.toFixed(4)}, {activeConfig.longitude.toFixed(4)}
+          <span className="text-sm text-base-content/60 font-medium">
+            Average Map Rank (ARP)
+          </span>
+          <span className="text-3xl font-extrabold text-primary mt-1">
+            {metrics.arp}
           </span>
         </div>
         <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
-          <span className="text-sm text-base-content/60 font-medium">Last Checked</span>
+          <span className="text-sm text-base-content/60 font-medium">
+            Share of Local Voice (SoLV)
+          </span>
+          <span className="text-3xl font-extrabold text-secondary mt-1">
+            {metrics.solv}
+          </span>
+        </div>
+        <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
+          <span className="text-sm text-base-content/60 font-medium">
+            Grid Center
+          </span>
+          <span className="text-sm font-semibold truncate mt-2">
+            {activeConfig.latitude.toFixed(4)},{" "}
+            {activeConfig.longitude.toFixed(4)}
+          </span>
+        </div>
+        <div className="card bg-base-100 border border-base-200 p-5 rounded-2xl">
+          <span className="text-sm text-base-content/60 font-medium">
+            Last Checked
+          </span>
           <span className="text-sm font-semibold mt-2">
             {activeConfig.lastCheckedAt
               ? new Date(activeConfig.lastCheckedAt).toLocaleDateString()
@@ -539,7 +658,7 @@ export function GeoGridPage({ projectId }: Props) {
 
               {/* Keywords list */}
               <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto">
-                {results?.keywords?.map((k: any) => {
+                {results?.keywords?.map((k: GeoGridKeyword) => {
                   const isActive = k.id === currentKeywordId;
                   return (
                     <div
@@ -551,7 +670,9 @@ export function GeoGridPage({ projectId }: Props) {
                           : "hover:bg-base-200"
                       }`}
                     >
-                      <span className="truncate flex-1 pr-2 text-sm">{k.keyword}</span>
+                      <span className="truncate flex-1 pr-2 text-sm">
+                        {k.keyword}
+                      </span>
                       <button
                         onClick={(e: React.MouseEvent) => {
                           e.stopPropagation();
@@ -561,7 +682,9 @@ export function GeoGridPage({ projectId }: Props) {
                           });
                         }}
                         className={`btn btn-ghost btn-xs btn-circle ${
-                          isActive ? "text-primary-content hover:bg-primary-focus" : "text-error"
+                          isActive
+                            ? "text-primary-content hover:bg-primary-focus"
+                            : "text-error"
                         }`}
                       >
                         <Trash2 className="size-3.5" />
@@ -569,7 +692,6 @@ export function GeoGridPage({ projectId }: Props) {
                     </div>
                   );
                 })}
-
 
                 {(!results?.keywords || results.keywords.length === 0) && (
                   <p className="text-sm text-base-content/50 py-6 text-center">
@@ -590,7 +712,9 @@ export function GeoGridPage({ projectId }: Props) {
               </div>
               <div className="flex justify-between border-b border-base-200 pb-2">
                 <span className="text-base-content/60">Grid Spacing</span>
-                <span className="font-medium">{activeConfig.gridSpacing} Miles</span>
+                <span className="font-medium">
+                  {activeConfig.gridSpacing} Miles
+                </span>
               </div>
               <div className="flex justify-between border-b border-base-200 pb-2">
                 <span className="text-base-content/60">Grid Dimensions</span>
@@ -600,7 +724,9 @@ export function GeoGridPage({ projectId }: Props) {
               </div>
               <div className="flex justify-between pb-1">
                 <span className="text-base-content/60">Check Schedule</span>
-                <span className="font-medium capitalize">{activeConfig.scheduleInterval}</span>
+                <span className="font-medium capitalize">
+                  {activeConfig.scheduleInterval}
+                </span>
               </div>
             </div>
           </div>
@@ -613,10 +739,14 @@ export function GeoGridPage({ projectId }: Props) {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="font-bold text-lg">
-                    Grid Rankings: {currentKeyword ? currentKeyword.keyword : "Select a keyword"}
+                    Grid Rankings:{" "}
+                    {currentKeyword
+                      ? currentKeyword.keyword
+                      : "Select a keyword"}
                   </h3>
                   <p className="text-xs text-base-content/60 mt-0.5">
-                    Grid cells show the local pack/maps ranking. Center represents business coordinates.
+                    Grid cells show the local pack/maps ranking. Center
+                    represents business coordinates.
                   </p>
                 </div>
               </div>

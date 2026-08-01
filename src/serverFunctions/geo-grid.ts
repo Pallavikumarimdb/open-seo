@@ -3,6 +3,8 @@ import { requireProjectContext } from "@/serverFunctions/middleware";
 import { GeoGridService } from "@/server/features/geo-grid/services/GeoGridService";
 import { GeoGridRepository } from "@/server/features/geo-grid/repositories/GeoGridRepository";
 import { z } from "zod";
+import { waitUntil } from "cloudflare:workers";
+import { AppError } from "@/server/lib/errors";
 
 const projectScopedSchema = z.object({ projectId: z.string().min(1) });
 
@@ -24,7 +26,9 @@ export const createGeoGridConfig = createServerFn({ method: "POST" })
       gridSize: z.number().int().min(3).max(7),
       gridSpacing: z.number().positive(),
       languageCode: z.string().optional(),
-      scheduleInterval: z.enum(["daily", "weekly", "monthly", "manual"]).optional(),
+      scheduleInterval: z
+        .enum(["daily", "weekly", "monthly", "manual"])
+        .optional(),
     }),
   )
   .handler(async ({ data, context }) => {
@@ -40,27 +44,6 @@ export const createGeoGridConfig = createServerFn({ method: "POST" })
     });
   });
 
-export const updateGeoGridConfig = createServerFn({ method: "POST" })
-  .middleware(requireProjectContext)
-  .validator(
-    z.object({
-      projectId: z.string().min(1),
-      configId: z.string().min(1),
-      businessName: z.string().min(1).optional(),
-      latitude: z.number().optional(),
-      longitude: z.number().optional(),
-      gridSize: z.number().int().min(3).max(7).optional(),
-      gridSpacing: z.number().positive().optional(),
-      languageCode: z.string().optional(),
-      scheduleInterval: z.enum(["daily", "weekly", "monthly", "manual"]).optional(),
-      isActive: z.boolean().optional(),
-    }),
-  )
-  .handler(async ({ data, context }) => {
-    await GeoGridService.updateConfig(data.configId, context.projectId, data);
-    return { success: true };
-  });
-
 export const addGeoGridKeywords = createServerFn({ method: "POST" })
   .middleware(requireProjectContext)
   .validator(
@@ -71,7 +54,11 @@ export const addGeoGridKeywords = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
-    return GeoGridService.addKeywords(data.configId, context.projectId, data.keywords);
+    return GeoGridService.addKeywords(
+      data.configId,
+      context.projectId,
+      data.keywords,
+    );
   });
 
 export const removeGeoGridKeywords = createServerFn({ method: "POST" })
@@ -84,7 +71,11 @@ export const removeGeoGridKeywords = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
-    await GeoGridService.removeKeywords(data.configId, context.projectId, data.keywordIds);
+    await GeoGridService.removeKeywords(
+      data.configId,
+      context.projectId,
+      data.keywordIds,
+    );
     return { success: true };
   });
 
@@ -97,7 +88,7 @@ export const triggerGeoGridCheck = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
-    return GeoGridService.triggerCheck({
+    const res = await GeoGridService.triggerCheck({
       configId: data.configId,
       projectId: context.projectId,
       billingCustomer: {
@@ -107,6 +98,8 @@ export const triggerGeoGridCheck = createServerFn({ method: "POST" })
         projectId: context.projectId,
       },
     });
+    waitUntil(res.promise);
+    return { ok: res.ok, runId: res.runId };
   });
 
 export const getGeoGridLatestResults = createServerFn({ method: "POST" })
@@ -118,8 +111,15 @@ export const getGeoGridLatestResults = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
-    const [config, keywords, latestRun, snapshots] = await Promise.all([
-      GeoGridRepository.getConfigById(data.configId, context.projectId),
+    const config = await GeoGridRepository.getConfigById(
+      data.configId,
+      context.projectId,
+    );
+    if (!config) {
+      throw new AppError("VALIDATION_ERROR", "Geo Grid config not found");
+    }
+
+    const [keywords, latestRun, snapshots] = await Promise.all([
       GeoGridRepository.getKeywordsForConfig(data.configId),
       GeoGridRepository.getLatestRunForConfig(data.configId),
       GeoGridRepository.getLatestSnapshotsForConfig(data.configId),
@@ -142,6 +142,12 @@ export const getGeoGridRuns = createServerFn({ method: "POST" })
     }),
   )
   .handler(async ({ data, context }) => {
+    const config = await GeoGridRepository.getConfigById(
+      data.configId,
+      context.projectId,
+    );
+    if (!config) {
+      throw new AppError("VALIDATION_ERROR", "Geo Grid config not found");
+    }
     return GeoGridRepository.getRunsForConfig(data.configId);
   });
-

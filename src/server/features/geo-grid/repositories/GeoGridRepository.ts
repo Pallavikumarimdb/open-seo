@@ -70,7 +70,10 @@ export class GeoGridRepository {
     await db.insert(geoGridKeywords).values(rows);
   }
 
-  static async removeKeywordsFromConfig(keywordIds: string[], configId: string) {
+  static async removeKeywordsFromConfig(
+    keywordIds: string[],
+    configId: string,
+  ) {
     if (keywordIds.length === 0) return;
     await db
       .delete(geoGridKeywords)
@@ -116,15 +119,6 @@ export class GeoGridRepository {
     return rows[0] ?? null;
   }
 
-  static async getRunById(runId: string) {
-    const rows = await db
-      .select()
-      .from(geoGridRuns)
-      .where(eq(geoGridRuns.id, runId))
-      .limit(1);
-    return rows[0] ?? null;
-  }
-
   static async updateRun(
     runId: string,
     data: Partial<InferInsertModel<typeof geoGridRuns>>,
@@ -132,7 +126,9 @@ export class GeoGridRepository {
     await db.update(geoGridRuns).set(data).where(eq(geoGridRuns.id, runId));
   }
 
-  static async insertSnapshots(rows: InferInsertModel<typeof geoGridSnapshots>[]) {
+  static async insertSnapshots(
+    rows: InferInsertModel<typeof geoGridSnapshots>[],
+  ) {
     if (rows.length === 0) return;
     await db.insert(geoGridSnapshots).values(rows);
   }

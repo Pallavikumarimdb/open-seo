@@ -1,7 +1,10 @@
 import { env } from "cloudflare:workers";
 import { GeoGridRepository } from "../repositories/GeoGridRepository";
 import { createDataforseoClient } from "@/server/lib/dataforseo";
-import { getRequiredEnvValue, isHostedServerAuthMode } from "@/server/lib/runtime-env";
+import {
+  getRequiredEnvValue,
+  isHostedServerAuthMode,
+} from "@/server/lib/runtime-env";
 import { AppError } from "@/server/lib/errors";
 
 export class GeoGridService {
@@ -48,9 +51,20 @@ export class GeoGridService {
     await GeoGridRepository.updateConfig(configId, projectId, input);
   }
 
-  static async addKeywords(configId: string, projectId: string, keywords: string[]) {
+  static async addKeywords(
+    configId: string,
+    projectId: string,
+    keywords: string[],
+  ) {
+    const config = await GeoGridRepository.getConfigById(configId, projectId);
+    if (!config) {
+      throw new AppError("VALIDATION_ERROR", "Geo Grid config not found");
+    }
+
     const existing = await GeoGridRepository.getKeywordsForConfig(configId);
-    const existingSet = new Set(existing.map((k) => k.keyword.toLowerCase().trim()));
+    const existingSet = new Set(
+      existing.map((k) => k.keyword.toLowerCase().trim()),
+    );
 
     const rows = [];
     for (const kw of keywords) {
@@ -70,7 +84,15 @@ export class GeoGridService {
     return { added: rows.length };
   }
 
-  static async removeKeywords(configId: string, projectId: string, keywordIds: string[]) {
+  static async removeKeywords(
+    configId: string,
+    projectId: string,
+    keywordIds: string[],
+  ) {
+    const config = await GeoGridRepository.getConfigById(configId, projectId);
+    if (!config) {
+      throw new AppError("VALIDATION_ERROR", "Geo Grid config not found");
+    }
     await GeoGridRepository.removeKeywordsFromConfig(keywordIds, configId);
   }
 
@@ -119,14 +141,32 @@ export class GeoGridService {
       projectId: string;
     };
   }) {
-    const config = await GeoGridRepository.getConfigById(input.configId, input.projectId);
+    const config = await GeoGridRepository.getConfigById(
+      input.configId,
+      input.projectId,
+    );
     if (!config) {
       throw new AppError("VALIDATION_ERROR", "Geo Grid config not found");
     }
 
-    const keywords = await GeoGridRepository.getKeywordsForConfig(input.configId);
+    const keywords = await GeoGridRepository.getKeywordsForConfig(
+      input.configId,
+    );
     if (keywords.length === 0) {
-      throw new AppError("VALIDATION_ERROR", "Please add at least one keyword first");
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Please add at least one keyword first",
+      );
+    }
+
+    const activeRun = await GeoGridRepository.getActiveRunForConfig(
+      input.configId,
+    );
+    if (activeRun) {
+      throw new AppError(
+        "VALIDATION_ERROR",
+        "Another check is already in progress",
+      );
     }
 
     const runId = crypto.randomUUID();
@@ -138,7 +178,10 @@ export class GeoGridService {
     });
 
     if (!ok) {
-      throw new AppError("INTERNAL_ERROR", "Another check is already in progress");
+      throw new AppError(
+        "INTERNAL_ERROR",
+        "Another check is already in progress",
+      );
     }
 
     // Run the check asynchronously
@@ -171,12 +214,16 @@ export class GeoGridService {
 
             if (isMock) {
               // Generate highly realistic mock rank data based on distance from center
-              const distance = Math.sqrt(point.gridX * point.gridX + point.gridY * point.gridY);
+              const distance = Math.sqrt(
+                point.gridX * point.gridX + point.gridY * point.gridY,
+              );
               // Shift center rank slightly based on keyword length to make each keyword distinct
               const keywordSeed = kw.keyword.length % 3;
               const baseRank = 1 + keywordSeed;
               // Ranks degrade as we go further out from center
-              const rankVal = Math.round(baseRank + distance * 2.5 + Math.random() * 1.5);
+              const rankVal = Math.round(
+                baseRank + distance * 2.5 + Math.random() * 1.5,
+              );
               position = rankVal <= 20 ? rankVal : null;
             } else {
               try {
@@ -194,15 +241,19 @@ export class GeoGridService {
                 const targetName = config.businessName.toLowerCase();
                 const matchedIndex = response.findIndex((item: any) => {
                   const title = String(item.title || "").toLowerCase();
-                  return title.includes(targetName) || targetName.includes(title);
+                  return (
+                    title.includes(targetName) || targetName.includes(title)
+                  );
                 });
 
                 position = matchedIndex !== -1 ? matchedIndex + 1 : null;
               } catch (err) {
-                console.error(`[geo-grid] DataForSEO call failed at (${point.lat}, ${point.lng}):`, err);
-                // Fallback to mock on individual failure if it's local dev
-                const distance = Math.sqrt(point.gridX * point.gridX + point.gridY * point.gridY);
-                position = Math.round(1 + distance * 3) <= 20 ? Math.round(1 + distance * 3) : null;
+                console.error(
+                  `[geo-grid] DataForSEO call failed at (${point.lat}, ${point.lng}):`,
+                  err,
+                );
+                // Re-throw in non-mock/production mode so the run fails with the real error
+                throw err;
               }
             }
 
@@ -239,6 +290,6 @@ export class GeoGridService {
 
     // Locally we don't await the promise so the trigger call returns immediately to the client
     // while the worker/runtime processes the job.
-    return { ok: true, runId };
+    return { ok: true, runId, promise: runCheckPromise };
   }
 }

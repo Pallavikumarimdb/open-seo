@@ -437,7 +437,6 @@ export const geoGridConfigs = sqliteTable("geo_grid_configs", {
     .default("weekly"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   lastCheckedAt: text("last_checked_at"),
-  nextCheckAt: text("next_check_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`(current_timestamp)`),
@@ -454,25 +453,33 @@ export const geoGridKeywords = sqliteTable("geo_grid_keywords", {
     .default(sql`(current_timestamp)`),
 });
 
-export const geoGridRuns = sqliteTable("geo_grid_runs", {
-  id: text("id").primaryKey(),
-  configId: text("config_id")
-    .notNull()
-    .references(() => geoGridConfigs.id, { onDelete: "cascade" }),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  status: text("status", {
-    enum: ["pending", "running", "completed", "failed"],
-  })
-    .notNull()
-    .default("pending"),
-  errorMessage: text("error_message"),
-  startedAt: text("started_at")
-    .notNull()
-    .default(sql`(current_timestamp)`),
-  completedAt: text("completed_at"),
-});
+export const geoGridRuns = sqliteTable(
+  "geo_grid_runs",
+  {
+    id: text("id").primaryKey(),
+    configId: text("config_id")
+      .notNull()
+      .references(() => geoGridConfigs.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["pending", "running", "completed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    errorMessage: text("error_message"),
+    startedAt: text("started_at")
+      .notNull()
+      .default(sql`(current_timestamp)`),
+    completedAt: text("completed_at"),
+  },
+  (table) => [
+    uniqueIndex("geo_grid_runs_active_idx")
+      .on(table.configId)
+      .where(sql`${table.status} IN ('pending', 'running')`),
+  ]
+);
 
 export const geoGridSnapshots = sqliteTable("geo_grid_snapshots", {
   id: integer("id").primaryKey({ autoIncrement: true }),

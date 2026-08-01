@@ -424,7 +424,6 @@ export const geoGridConfigs = pgTable("geo_grid_configs", {
     .default("weekly"),
   isActive: boolean("is_active").notNull().default(true),
   lastCheckedAt: timestampColumn("last_checked_at"),
-  nextCheckAt: timestampColumn("next_check_at"),
   createdAt: timestampColumn("created_at").notNull().default(isoNow),
 });
 
@@ -437,23 +436,31 @@ export const geoGridKeywords = pgTable("geo_grid_keywords", {
   createdAt: timestampColumn("created_at").notNull().default(isoNow),
 });
 
-export const geoGridRuns = pgTable("geo_grid_runs", {
-  id: text("id").primaryKey(),
-  configId: text("config_id")
-    .notNull()
-    .references(() => geoGridConfigs.id, { onDelete: "cascade" }),
-  projectId: text("project_id")
-    .notNull()
-    .references(() => projects.id, { onDelete: "cascade" }),
-  status: text("status", {
-    enum: ["pending", "running", "completed", "failed"],
-  })
-    .notNull()
-    .default("pending"),
-  errorMessage: text("error_message"),
-  startedAt: timestampColumn("started_at").notNull().default(isoNow),
-  completedAt: timestampColumn("completed_at"),
-});
+export const geoGridRuns = pgTable(
+  "geo_grid_runs",
+  {
+    id: text("id").primaryKey(),
+    configId: text("config_id")
+      .notNull()
+      .references(() => geoGridConfigs.id, { onDelete: "cascade" }),
+    projectId: text("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    status: text("status", {
+      enum: ["pending", "running", "completed", "failed"],
+    })
+      .notNull()
+      .default("pending"),
+    errorMessage: text("error_message"),
+    startedAt: timestampColumn("started_at").notNull().default(isoNow),
+    completedAt: timestampColumn("completed_at"),
+  },
+  (table) => [
+    uniqueIndex("geo_grid_runs_active_idx")
+      .on(table.configId)
+      .where(sql`${table.status} IN ('pending', 'running')`),
+  ]
+);
 
 export const geoGridSnapshots = pgTable("geo_grid_snapshots", {
   id: serial("id").primaryKey(),
